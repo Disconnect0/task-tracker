@@ -382,7 +382,8 @@
         <div style="width: 1px; height: 16px; background: var(--border-color); margin: 0 2px;"></div>
         
         <!-- Action Buttons -->
-        <button id="sync-btn" title="Force Sync Cloud" aria-label="Force sync with cloud" onclick="loadTrackerData()" style="background: none; border: none; font-size: 15px; cursor: pointer; padding: 0;">🔄</button>
+        <button id="sync-mode-toggle" title="Turn cloud sync on or off" aria-label="Toggle cloud sync" onclick="toggleSyncMode()" style="display:none; background: none; border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; padding: 3px 7px; color: var(--text-main);">☁️ Sync: On</button>
+        <button id="sync-btn" title="Force Sync Cloud" aria-label="Force sync with cloud" onclick="loadTrackerData()" style="display:none; background: none; border: none; font-size: 15px; cursor: pointer; padding: 0;">🔄</button>
         <button id="theme-toggle" title="Toggle Dark Mode" aria-label="Toggle dark mode" style="background: none; border: none; font-size: 15px; cursor: pointer; padding: 0;">🌙</button>
     </div>
 </div>
@@ -595,12 +596,62 @@
     // WORKER_URL and DEFAULT_TRACKER_DATA are defined in config.js
     const SYNC_TOKEN_KEY = `${STORAGE_PREFIX}_sync_token`;
     const TRACKER_CACHE_KEY = `${STORAGE_PREFIX}_tracker`;
+    const SYNC_MODE_KEY = `${STORAGE_PREFIX}_sync_enabled`;
 
     let trackerData = DEFAULT_TRACKER_DATA;
     let currentTrackerCategory = 'tasks';
     let editItemId = null;
 
+    function isWorkerConfigured() {
+        return !!WORKER_URL && !WORKER_URL.includes("your-worker-subdomain");
+    }
+
+    function isSyncEnabled() {
+        if (!isWorkerConfigured()) return false;
+        const stored = localStorage.getItem(SYNC_MODE_KEY);
+        return stored === null ? true : stored === 'true'; // default ON once a real worker is configured
+    }
+
+    function updateSyncModeButtonUI() {
+        const btn = document.getElementById('sync-mode-toggle');
+        const syncBtn = document.getElementById('sync-btn');
+        if (!btn) return;
+        if (!isWorkerConfigured()) {
+            btn.style.display = 'none';
+            if (syncBtn) syncBtn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'inline-block';
+        if (isSyncEnabled()) {
+            btn.textContent = '☁️ Sync: On';
+            btn.style.color = 'var(--active-green)';
+            btn.style.borderColor = 'var(--active-green)';
+            if (syncBtn) syncBtn.style.display = 'inline-block';
+        } else {
+            btn.textContent = '📴 Local Only';
+            btn.style.color = 'var(--text-muted)';
+            btn.style.borderColor = 'var(--border-color)';
+            if (syncBtn) syncBtn.style.display = 'none'; // nothing to force-sync while sync is off
+        }
+    }
+
+    function toggleSyncMode() {
+        const turningOn = !isSyncEnabled();
+        localStorage.setItem(SYNC_MODE_KEY, String(turningOn));
+        updateSyncModeButtonUI();
+        if (turningOn) {
+            // Pulls the latest cloud copy now that syncing is back on — same
+            // behavior as the "force sync" button, so it can overwrite
+            // whatever was showing locally while sync was off.
+            loadTrackerData();
+        }
+    }
+
     function checkAdminPassword() {
+        // The password only guards writes to the shared cloud copy — no
+        // point asking for it when this browser isn't syncing anywhere.
+        if (!isSyncEnabled()) return true;
+
         // Clear any old permanent passwords just in case
         localStorage.removeItem(SYNC_TOKEN_KEY);
 
@@ -624,8 +675,8 @@
     }
 
     async function loadTrackerData(isBackground = false) {
-        if (!WORKER_URL || WORKER_URL.includes("your-worker-subdomain")) {
-            if (!isBackground) console.warn("Worker URL is not configured. Running in local mode.");
+        if (!isSyncEnabled()) {
+            if (!isBackground && isWorkerConfigured()) console.info("Cloud sync is turned off. Running in local mode.");
             trackerData = JSON.parse(localStorage.getItem(TRACKER_CACHE_KEY)) || DEFAULT_TRACKER_DATA;
             if (!trackerData.archives) trackerData.archives = [];
             renderTracker();
@@ -651,7 +702,9 @@
 
     async function saveTrackerData() {
         localStorage.setItem(TRACKER_CACHE_KEY, JSON.stringify(trackerData)); 
-        
+
+        if (!isSyncEnabled()) return; // local-only mode: saved above, nothing more to do
+
         const token = getSyncToken();
         if (!token) {
             alert("No password provided. Changes saved to your browser but NOT synced to the cloud.");
@@ -1520,6 +1573,7 @@
     document.getElementById('schedule-panel-title').textContent = `${SITE_TITLE} Class Schedule`;
     document.getElementById('tracker-panel-title').textContent = `${SITE_TITLE} Task Tracker`;
     renderClassSchedule();
+    updateSyncModeButtonUI();
     populateCourseDropdowns();
     loadTrackerData();
     renderYearCalendar();
